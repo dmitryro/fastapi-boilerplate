@@ -47,11 +47,6 @@ DATABASE_URL: str = (
 MAX_CONNECTIONS_COUNT: int = config("MAX_CONNECTIONS_COUNT", cast=int, default=10)
 MIN_CONNECTIONS_COUNT: int = config("MIN_CONNECTIONS_COUNT", cast=int, default=10)
 
-# Model & Paths
-MODEL_PATH: str = config("MODEL_PATH", default="./ml/model/")
-MODEL_NAME: str = config("MODEL_NAME", default="model.pkl")
-INPUT_EXAMPLE: str = config("INPUT_EXAMPLE", default="./ml/model/questions/questions.json")
-
 # Uvicorn settings
 HOST: str = config("HOST", default="0.0.0.0")
 PORT: int = config("PORT", cast=int, default=8080)
