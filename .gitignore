@@ -1,0 +1,128 @@
+# ====================
+# General
+# ====================
+.DS_Store
+Thumbs.db
+*.log
+*.log.*
+*.swp
+*.bak
+*.tmp
+*.temp
+*.old
+*.orig
+
+# ====================
+# Node (Angular frontend)
+# ====================
+node_modules/
+dist/
+build/
+tmp/
+out-tsc/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log
+package-lock.json
+yarn.lock
+coverage/
+.vitepress/
+.husky/_
+
+# Angular specific
+.angular/
+.angular-cache/
+.sass-cache/
+.e2e/
+*.tgz
+
+# Testing and reporting
+/coverage
+/junit.xml
+/test-results
+
+# Webpack / build tools
+/bundle-report.html
+/stats.json
+
+# ====================
+# Python (FastAPI backend)
+# ====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+*.sqlite3
+*.db
+*.db-journal
+.env
+.env.*
+*.env.*
+instance/
+venv/
+venv*/  # handles venv, venv3, etc.
+.mypy_cache/
+.pytest_cache/
+.tox/
+.coverage
+coverage.xml
+
+# ====================
+# IDEs & Editors
+# ====================
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+.history/
+*.code-workspace
+
+# ====================
+# Docs / Releases / Misc
+# ====================
+release-notes.md
+NOTICE.xml
+signature.pem
+README.old.md
+*.tar.gz
+*.tgz
+*.zip
+HEAD
+firebase.json
+.neo4j*
+
+# ====================
+# Specific project folders to ignore
+# ====================
+functions/
+e2e_tests/screenshots/
+e2e_tests/videos/
+screenshot/
+roadhog-api-doc/
+src/utils/request-temp.js
+
+# Umi (JS framework)
+.umi/
+.umi-production/
+
+# Firebase
+.firebase/
+
+# VS Code settings
+.vscode/
+
+# Python virtual environment names
+.env/
+.env.bak
+.venv/
+.pipenv/
+pip-wheel-metadata/
+
+# Roadhog
+_roadhog-api-doc
+
