@@ -1,9 +1,38 @@
-version: '3.8'
+version: '3.9'
 services:
-  app:
-    build: .
+  db:
+    image: postgres:17
+    container_name: postgres17
+    restart: always
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
     ports:
-      - "8001:8001"
+      - "5432:5432"
     volumes:
-      - .:/app
-    command: python run_app.py
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  api:
+    build: .
+    command: ["python", "run_app.py"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  pgdata:
+  redisdata:
