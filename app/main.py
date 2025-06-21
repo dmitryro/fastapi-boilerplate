@@ -20,7 +20,6 @@ from app.core.config import (
 )
 from app.core.events import create_start_app_handler
 
-
 def custom_openapi(app: FastAPI):
     if app.openapi_schema:
         return app.openapi_schema
@@ -49,7 +48,6 @@ def custom_openapi(app: FastAPI):
         }
     }
 
-    # Apply both options globally to all paths
     for path in openapi_schema["paths"].values():
         for operation in path.values():
             operation["security"] = [
@@ -59,7 +57,6 @@ def custom_openapi(app: FastAPI):
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
-
 
 def get_application() -> FastAPI:
     app = FastAPI(
@@ -72,7 +69,9 @@ def get_application() -> FastAPI:
     )
 
     # Public health and ask endpoints
-    app.include_router(api_router, prefix=API_PREFIX)
+    app.include_router(api_router, prefix=API_PREFIX)  # Mount app/api/routes/api.py under /api/v1
+    # Comment out to avoid conflicts; re-enable if app/api/v1/routes/api.py is needed
+    # app.include_router(api_router, prefix=API_PREFIX)
 
     # Authentication endpoints
     app.include_router(auth_router, prefix=f"{API_PREFIX}/auth")
@@ -93,6 +92,4 @@ def get_application() -> FastAPI:
 
     return app
 
-
 app = get_application()
-
