@@ -228,8 +228,8 @@ Use `pytest-asyncio` for async test functions.
 
 Visit interactive docs:
 
-- Swagger UI: `http://localhost:8000/docs`
-- Redoc: `http://localhost:8000/redoc`
+- Swagger UI: `http://localhost:8000/api/v1/docs`
+- Redoc: `http://localhost:8000/api/v1/redoc`
 
 ---
 
