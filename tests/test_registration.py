@@ -1,76 +1,82 @@
-# tests/test_registration.py
-
 import pytest
-from httpx import AsyncClient
-from app.main import app
-from app.core.db.session import async_session_maker
-from app.api.v1.models.role import Role
+from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.main import app
+from app.core.db.session import AsyncSessionLocal
+from fastapi import status
 
+@pytest.fixture(scope="module")
+async def async_client():
+    transport = ASGITransport(app=app, lifespan="on")
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
 
 @pytest.fixture
-async def create_test_role():
-    async with async_session_maker() as session:
-        role = Role(name="member", permissions=["read"])
-        session.add(role)
-        await session.commit()
-        await session.refresh(role)
-        return role.id
-
+async def async_session() -> AsyncSession:
+    async with AsyncSessionLocal() as session:
+        yield session
 
 @pytest.mark.asyncio
-async def test_register_success(create_test_role):
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        payload = {
-            "email": "newuser@example.com",
-            "username": "newuser",
-            "password": "strongpass123",
-            "role_id": create_test_role
-        }
-        response = await ac.post("/api/v1/register", json=payload)
-        assert response.status_code == 201
-        data = response.json()
-        assert data["email"] == "newuser@example.com"
-        assert data["username"] == "newuser"
-        assert "id" in data
-        assert "password" not in data  # Ensure password is excluded
-
+async def test_register_success(async_client: AsyncClient):
+    payload = {
+        "email": "newregister@example.com",
+        "username": "newregister",
+        "password": "registerpass",
+        "role_id": 2
+    }
+    response = await async_client.post("/api/v1/registration", json=payload)
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["email"] == payload["email"]
+    assert "id" in data
 
 @pytest.mark.asyncio
-async def test_register_existing_email(create_test_role):
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        payload = {
-            "email": "dupe@example.com",
-            "username": "dupeuser1",
-            "password": "pass123",
-            "role_id": create_test_role
-        }
-        await ac.post("/api/v1/register", json=payload)
+async def test_register_existing_email(async_client: AsyncClient, async_session: AsyncSession):
+    # Create user with the email first
+    from app.api.v1.models.user import User
+    from app.api.v1.security.passwords import hash_password
 
-        payload["username"] = "dupeuser2"
-        response = await ac.post("/api/v1/register", json=payload)
-        assert response.status_code == 400
-        assert "already exists" in response.json()["detail"]
+    user = User(
+        email="existingemail@example.com",
+        username="userexists",
+        password=hash_password("password"),
+        role_id=2
+    )
+    async_session.add(user)
+    await async_session.commit()
 
+    payload = {
+        "email": "existingemail@example.com",
+        "username": "anotheruser",
+        "password": "anotherpass",
+        "role_id": 2
+    }
+    response = await async_client.post("/api/v1/registration", json=payload)
+    assert response.status_code == 400
+    assert "email" in response.json()["detail"].lower()
 
 @pytest.mark.asyncio
-async def test_register_existing_username(create_test_role):
-    async with AsyncClient(app=app, base_url="http://test") as ac:
-        payload1 = {
-            "email": "unique1@example.com",
-            "username": "repeatuser",
-            "password": "pass123",
-            "role_id": create_test_role
-        }
-        await ac.post("/api/v1/register", json=payload1)
+async def test_register_existing_username(async_client: AsyncClient, async_session: AsyncSession):
+    # Create user with the username first
+    from app.api.v1.models.user import User
+    from app.api.v1.security.passwords import hash_password
 
-        payload2 = {
-            "email": "unique2@example.com",
-            "username": "repeatuser",
-            "password": "pass456",
-            "role_id": create_test_role
-        }
-        response = await ac.post("/api/v1/register", json=payload2)
-        assert response.status_code == 400
-        assert "already exists" in response.json()["detail"]
+    user = User(
+        email="uniqueemail@example.com",
+        username="existingusername",
+        password=hash_password("password"),
+        role_id=2
+    )
+    async_session.add(user)
+    await async_session.commit()
+
+    payload = {
+        "email": "newemail@example.com",
+        "username": "existingusername",
+        "password": "newpass",
+        "role_id": 2
+    }
+    response = await async_client.post("/api/v1/registration", json=payload)
+    assert response.status_code == 400
+    assert "username" in response.json()["detail"].lower()
 

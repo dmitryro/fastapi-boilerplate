@@ -195,6 +195,12 @@ Run tests:
 pytest
 ```
 
+To test specifically FastAPI app:
+
+```bash
+pytest --cov=app --cov-report=term-missing
+```
+
 ---
 
 ## 📖 Adding Tests with Pytest
