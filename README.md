@@ -195,10 +195,16 @@ Run tests:
 pytest
 ```
 
-To test specifically FastAPI app:
+To test entire FastAPI app:
 
 ```bash
 pytest --cov=app --cov-report=term-missing
+```
+
+To test, for example, users route, run:
+
+```bash
+pytest tests/test_user.py
 ```
 
 ---
