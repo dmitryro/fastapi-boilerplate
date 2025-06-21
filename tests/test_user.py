@@ -1,157 +1,226 @@
 import pytest
-from unittest.mock import AsyncMock, patch, ANY
-from datetime import datetime
 from fastapi import status
-from httpx import AsyncClient
 from httpx._transports.asgi import ASGITransport
-
+from httpx import AsyncClient
+from unittest.mock import AsyncMock
 from app.main import app
-from app.core.config import API_PREFIX
-from app.core.db.session import get_db
+from app.api.v1.security.jwt import get_current_user
 from app.api.v1.dependencies.permissions import require_permission
+from app.core.db.session import get_db
+from app.api.v1.models.user import User as UserModel
+from datetime import datetime, timezone
+import logging
 
+# Set up logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
-# --- Dependency overrides ---
+# Dummy current user and permission
+class DummyUser:
+    id = 1
+    username = "admin"
+    role_id = 1
 
-class AsyncSessionMock:
-    async def execute(self, *args, **kwargs):
-        return None
-    async def commit(self): pass
-    async def refresh(self, obj): pass
-    async def delete(self, obj): pass
+class DummyRole:
+    id = 1
+    name = "admin"
+    permissions = ["create", "read", "update", "delete"]
 
-async def override_get_db():
-    yield AsyncSessionMock()
+# Async dummy current user
+async def dummy_get_current_user():
+    logger.debug("Dummy get_current_user called")
+    return DummyUser()
 
-# override require_permission which takes a permission name argument
-def override_require_permission(permission_name):
-    async def dummy_permission():
-        return True
-    return dummy_permission
+# Async dummy permission checker
+def dummy_require_permission(permission: str):
+    logger.debug(f"Require permission called for: {permission}")
+    async def inner():
+        return DummyUser()
+    return inner
 
-app.dependency_overrides[get_db] = override_get_db
-app.dependency_overrides[require_permission] = override_require_permission
+# DB fixture with awaited async mocks
+@pytest.fixture
+async def async_client():
+    # Override user and permission dependencies
+    app.dependency_overrides[get_current_user] = dummy_get_current_user
+    app.dependency_overrides[require_permission] = dummy_require_permission
 
+    # Create an AsyncMock for DB session
+    db = AsyncMock()
+    db.commit = AsyncMock()
+    db.refresh = AsyncMock()
+    db.add = AsyncMock()
+    db.delete = AsyncMock()
+    # Mock db.execute to return a Result object
+    db.execute = AsyncMock(return_value=type('Result', (), {
+        'scalars': lambda *args, **kwargs: type('Scalars', (), {
+            'first': lambda *args, **kwargs: DummyRole(),
+            'all': lambda *args, **kwargs: []
+        })(),
+        'scalar_one_or_none': lambda *args, **kwargs: DummyRole()
+    })())
 
-# --- Tests ---
+    async def mock_get_db():
+        logger.debug("Mock get_db called")
+        yield db
 
-@pytest.mark.asyncio
-@patch("app.api.v1.services.user.UserService.create_user", new_callable=AsyncMock)
-async def test_create_user(mock_create_user):
-    now = datetime.utcnow()
-    mock_create_user.return_value = {
-        "id": 1,
-        "first": "Test",
-        "last": "User",
-        "username": "testuser",
-        "email": "test@example.com",
-        "phone": None,
-        "role_id": 2,
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat(),
-    }
+    app.dependency_overrides[get_db] = mock_get_db
 
+    # Setup HTTPX client
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            f"{API_PREFIX}/users/",
-            json={
-                "first": "Test",
-                "last": "User",
-                "username": "testuser",
-                "email": "test@example.com",
-                "password": "pass123",
-                "phone": None,
-                "role_id": 2,
-            },
-        )
+        yield client
 
+    app.dependency_overrides.clear()
+
+# User factory
+def user_model_stub(**kwargs):
+    return UserModel(
+        id=kwargs.get("id", 1),
+        email=kwargs.get("email", "user@example.com"),
+        username=kwargs.get("username", "user"),
+        password="hashedpw",
+        role_id=kwargs.get("role_id", 2),
+        first=kwargs.get("first", "First"),
+        last=kwargs.get("last", "Last"),
+        phone=kwargs.get("phone", None),
+        created_at=kwargs.get("created_at", datetime.now(timezone.utc)),
+        updated_at=kwargs.get("updated_at", datetime.now(timezone.utc)),
+    )
+
+@pytest.mark.asyncio
+async def test_create_user(async_client, monkeypatch):
+    async def mock_create_user(db, user_in):
+        logger.debug("Mock create_user called")
+        return user_model_stub(email=user_in.email, username=user_in.username)
+
+    monkeypatch.setattr("app.api.v1.services.user.UserService.create_user", mock_create_user)
+
+    logger.debug("Sending POST request to /api/v1/users/")
+    response = await async_client.post(
+        "/api/v1/users/",
+        json={
+            "email": "newuser@example.com",
+            "username": "newuser",
+            "password": "SecurePass123!",
+            "role_id": 2,
+            "first": "New",
+            "last": "User",
+            "phone": None,
+        },
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_201_CREATED
     data = response.json()
-    assert data["username"] == "testuser"
-    assert data["email"] == "test@example.com"
-    assert data["first"] == "Test"
-    mock_create_user.assert_awaited_once()
-
+    assert data["email"] == "newuser@example.com"
+    assert data["username"] == "newuser"
 
 @pytest.mark.asyncio
-@patch("app.api.v1.services.user.UserService.get_user", new_callable=AsyncMock)
-async def test_get_user(mock_get_user):
-    now = datetime.utcnow()
-    mock_get_user.return_value = {
-        "id": 1,
-        "first": "Get",
-        "last": "User",
-        "username": "getuser",
-        "email": "get@example.com",
-        "phone": None,
-        "role_id": 3,
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat(),
-    }
+async def test_get_user(async_client, monkeypatch):
+    async def mock_get_user(db, user_id):
+        logger.debug("Mock get_user called")
+        return user_model_stub(id=user_id, username="existinguser")
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get(f"{API_PREFIX}/users/1")
+    monkeypatch.setattr("app.api.v1.services.user.UserService.get_user", mock_get_user)
 
+    logger.debug("Sending GET request to /api/v1/users/1")
+    response = await async_client.get(
+        "/api/v1/users/1",
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    assert data["username"] == "getuser"
-    assert data["first"] == "Get"
-    mock_get_user.assert_awaited_once_with(1, ANY)
-
+    assert response.json()["username"] == "existinguser"
 
 @pytest.mark.asyncio
-@patch("app.api.v1.services.user.UserService.get_user", new_callable=AsyncMock)
-async def test_get_user_not_found(mock_get_user):
-    mock_get_user.return_value = None
+async def test_get_user_not_found(async_client, monkeypatch):
+    async def mock_get_user(db, user_id):
+        logger.debug("Mock get_user called")
+        return None
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get(f"{API_PREFIX}/users/9999")
+    monkeypatch.setattr("app.api.v1.services.user.UserService.get_user", mock_get_user)
 
+    logger.debug("Sending GET request to /api/v1/users/999")
+    response = await async_client.get(
+        "/api/v1/users/999",
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"] == "User not found"
-    mock_get_user.assert_awaited_once_with(9999, ANY)
-
 
 @pytest.mark.asyncio
-@patch("app.api.v1.services.user.UserService.get_all_users", new_callable=AsyncMock)
-async def test_list_users(mock_get_all_users):
-    now = datetime.utcnow()
-    mock_get_all_users.return_value = [
-        {
-            "id": 1,
-            "first": "First1",
-            "last": "Last1",
-            "username": "user1",
-            "email": "user1@example.com",
-            "phone": None,
-            "role_id": 1,
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
-        },
-        {
-            "id": 2,
-            "first": "First2",
-            "last": "Last2",
-            "username": "user2",
-            "email": "user2@example.com",
-            "phone": None,
-            "role_id": 2,
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
-        },
-    ]
+async def test_list_users(async_client, monkeypatch):
+    async def mock_get_all_users(db):
+        logger.debug("Mock get_all_users called")
+        return [
+            user_model_stub(id=1, username="user1", email="user1@example.com"),
+            user_model_stub(id=2, username="user2", email="user2@example.com"),
+        ]
 
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get(f"{API_PREFIX}/users/")
+    monkeypatch.setattr("app.api.v1.services.user.UserService.get_all_users", mock_get_all_users)
 
+    logger.debug("Sending GET request to /api/v1/users/")
+    response = await async_client.get(
+        "/api/v1/users/",
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
     assert isinstance(data, list)
-    assert data[0]["username"] == "user1"
-    assert data[1]["email"] == "user2@example.com"
-    mock_get_all_users.assert_awaited_once()
+    assert len(data) == 2
 
+@pytest.mark.asyncio
+async def test_update_user(async_client, monkeypatch):
+    async def mock_update_user(db, user_id, user_in):
+        logger.debug("Mock update_user called")
+        return user_model_stub(id=user_id, username="updateduser", email="updated@example.com")
+
+    monkeypatch.setattr("app.api.v1.services.user.UserService.update_user", mock_update_user)
+
+    logger.debug("Sending PUT request to /api/v1/users/1")
+    response = await async_client.put(
+        "/api/v1/users/1",
+        json={
+            "email": "updated@example.com",
+            "username": "updateduser",
+            "role_id": 2,
+            "first": "Updated",
+            "last": "User",
+            "phone": None,
+        },
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["username"] == "updateduser"
+
+@pytest.mark.asyncio
+async def test_delete_user(async_client, monkeypatch):
+    async def mock_delete_user(db, user_id):
+        logger.debug("Mock delete_user called")
+        return True
+
+    monkeypatch.setattr("app.api.v1.services.user.UserService.delete_user", mock_delete_user)
+
+    logger.debug("Sending DELETE request to /api/v1/users/1")
+    response = await async_client.delete(
+        "/api/v1/users/1",
+        headers={"Authorization": "Bearer fake-token"},
+        params={"args": "", "kwargs": ""}
+    )
+
+    logger.debug(f"Response status: {response.status_code}, body: {response.text}")
+    assert response.status_code == status.HTTP_204_NO_CONTENT

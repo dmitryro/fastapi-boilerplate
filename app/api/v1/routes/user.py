@@ -7,7 +7,7 @@ from app.api.v1.schemas.user import User, UserCreate, UserUpdate
 from app.api.v1.services.user import UserService
 from app.api.v1.security.jwt import require_permission
 
-router = APIRouter(prefix="/api/v1/users", tags=["Users"])
+router = APIRouter(prefix="", tags=["Users"])
 
 @router.get("/", response_model=List[User])
 async def read_users(

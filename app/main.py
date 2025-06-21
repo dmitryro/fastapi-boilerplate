@@ -7,6 +7,7 @@ from app.api.v1.routes.user import router as user_router
 from app.api.v1.routes.role import router as role_router
 from app.api.v1.routes.registration import router as registration_router
 from app.api.v1.routes.login import router as login_router
+from app.core.middleware.debug_middleware import debug_middleware
 
 from app.core.config import (
     PROJECT_NAME,
@@ -88,6 +89,7 @@ def get_application() -> FastAPI:
 
     # Override OpenAPI schema generation with OAuth2 password flow
     app.openapi = lambda: custom_openapi(app)
+    app.middleware("http")(debug_middleware)
 
     return app
 
