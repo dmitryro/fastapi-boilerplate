@@ -25,9 +25,9 @@ ALGORITHM: str = config("ALGORITHM", default="HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES: int = config("ACCESS_TOKEN_EXPIRE_MINUTES", cast=int, default=60)
 DEBUG: bool = config("DEBUG", cast=bool, default=False)
 MEMOIZATION_FLAG: bool = config("MEMOIZATION_FLAG", cast=bool, default=True)
-DESCRIPTION: str = config("DESCRIPTION", default="NLP Project")
+DESCRIPTION: str = config("DESCRIPTION", default="FastAPI Boilerplate Project")
 DOCS_URL: str = config("DOCS_URL", default="/api/v1/docs")
-PROJECT_NAME: str = config("PROJECT_NAME", default="nlp-api")
+PROJECT_NAME: str = config("PROJECT_NAME", default="fastapi-boilerplate-api")
 JWT_ISSUER: str = config("JWT_ISSUER", default="BioIntelligence")
 
 # DB Connection Pieces
