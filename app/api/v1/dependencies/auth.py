@@ -14,20 +14,21 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail="Invalid or missing token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing token")
 
     token = credentials.credentials
     try:
         payload = jwt.decode(token, str(SECRET_KEY), algorithms=[ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
     except JWTError:
-        raise HTTPException(status_code=401, detail="Could not validate token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate token")
 
-    user = await db.execute(select(User).where(User.username == username))
-    user_obj = user.scalars().first()
+    result = await db.execute(select(User).where(User.username == username))
+    user_obj = result.scalars().first()
     if not user_obj:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     return user_obj
+
