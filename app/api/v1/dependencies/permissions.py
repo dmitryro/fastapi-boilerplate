@@ -5,7 +5,7 @@ from sqlalchemy import select
 from app.api.v1.models.user import User
 from app.api.v1.models.role import Role
 from app.core.db.session import get_db
-from app.api.v1.security.jwt import get_current_user
+from app.api.v1.dependencies import get_current_user
 
 def require_permission(permission: str):
     async def role_guard(
