@@ -332,8 +332,7 @@ Alembic config is in `alembic.ini`. Migrations use the `app.core.db.session.Base
 Async tests under `tests/`:
 
 ```bash
-pytest
-pytest --cov=app --cov-report=term-missing
+pytest --cov=app --cov-report=term-missing -v --log-cli-level=DEBUG
 ```
 
 To test, for example, users route, run:
