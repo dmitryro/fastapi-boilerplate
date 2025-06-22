@@ -101,10 +101,10 @@ def require_permission(permission: str):
         if role is None:
             raise HTTPException(status_code=403, detail="Role not found")
 
-        # Assuming role.permissions is a list or set of strings, adjust if it's different
+        # Defensive handling if permissions is None
         print(f"User: {user.username}, Role: {role.name}, Permissions: {role.permissions}")
-        if permission not in role.permissions:
-            print(f"Permission '{permission}' missing in {role.permissions}")
+        if not role.permissions or permission not in role.permissions:
+            print(f"Permission '{permission}' missing or role.permissions is None")
             raise HTTPException(status_code=403, detail="Permission denied")
         return user
     return role_guard

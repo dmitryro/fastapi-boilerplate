@@ -22,7 +22,7 @@ def require_permission(permission: str):
         result = await db.execute(select(Role).where(Role.id == user.role_id))
         role = result.scalar_one_or_none()
 
-        if not role or permission not in (role.permissions or []):
+        if not role.permissions or permission not in role.permissions: 
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Missing required permission: {permission}"
