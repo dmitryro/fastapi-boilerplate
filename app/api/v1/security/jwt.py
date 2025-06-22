@@ -13,7 +13,6 @@ from app.api.v1.models.role import Role
 from app.core.db.session import get_db
 from app.core.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 
-
 bearer_scheme = HTTPBearer(auto_error=False)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -26,7 +25,7 @@ def decode_jwt(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
@@ -42,14 +41,11 @@ async def get_current_user(
     # 1. Try Bearer token from OAuth2PasswordBearer
     if token:
         try:
-            payload = decode_jwt(token)
+            payload = jwt.decode(token, str(SECRET_KEY), algorithms=[ALGORITHM])
             username: str = payload.get("sub")
             if not username:
-                raise HTTPException(status_code=401, detail="No subject claim in token")
-        except HTTPException:
-            # propagate HTTPException raised by decode_jwt
-            raise
-        except Exception:
+                raise ValueError("No sub claim in token")
+        except JWTError:
             raise HTTPException(status_code=401, detail="Invalid Bearer token")
 
         result = await db.execute(select(User).filter(User.username == username))
@@ -61,13 +57,11 @@ async def get_current_user(
     # 2. Try Bearer token from HTTPBearer scheme (optional fallback)
     if bearer and bearer.scheme.lower() == "bearer":
         try:
-            payload = decode_jwt(bearer.credentials)
+            payload = jwt.decode(bearer.credentials, str(SECRET_KEY), algorithms=[ALGORITHM])
             username: str = payload.get("sub")
             if not username:
-                raise HTTPException(status_code=401, detail="No subject claim in token")
-        except HTTPException:
-            raise
-        except Exception:
+                raise ValueError("No sub claim in token")
+        except JWTError:
             raise HTTPException(status_code=401, detail="Invalid Bearer token")
 
         result = await db.execute(select(User).filter(User.username == username))
@@ -107,24 +101,24 @@ def require_permission(permission: str):
         if role is None:
             raise HTTPException(status_code=403, detail="Role not found")
 
-        # Defensive handling if permissions is None or non-iterable
-        perms = role.permissions
-        if perms is None:
+        perms = getattr(role, "permissions", None)
+
+        # Check if perms is iterable (like list, set, tuple, str), else deny permission
+        if not perms or not hasattr(perms, "__iter__") or isinstance(perms, (str, bytes)) and len(perms) == 0:
+            # Covers None, empty, non-iterable, or empty string/bytes
             raise HTTPException(status_code=403, detail="Permission denied")
 
-        # Check if perms is iterable (but not a string)
+        print(f"User: {user.username}, Role: {role.name}, Permissions: {perms}")
+
+        # Now safely check membership, wrap in try-except to catch any other unexpected errors
         try:
-            iter(perms)
+            if permission not in perms:
+                print(f"Permission '{permission}' missing in {perms}")
+                raise HTTPException(status_code=403, detail="Permission denied")
         except TypeError:
-            raise HTTPException(status_code=403, detail="Permission denied")
-
-        if isinstance(perms, str):
-            # Single string, not a list
-            perms = [perms]
-
-        if permission not in perms:
+            # perms is not iterable
             raise HTTPException(status_code=403, detail="Permission denied")
 
         return user
-    return role_guard
 
+    return role_guard

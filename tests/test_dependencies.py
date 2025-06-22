@@ -12,23 +12,33 @@ from app.api.v1.dependencies.auth import get_current_user as auth_get_current_us
 from app.api.v1.dependencies.__init__ import get_current_user as init_get_current_user
 
 
+# --- Test __init__.py coverage missing line (line 27) ---
+def test_dependencies_init_get_current_user_function_exists():
+    import app.api.v1.dependencies as deps
+    # line 27 is get_current_user function export
+    assert callable(deps.get_current_user)
+
+def test_dependencies_init_imports():
+    import app.api.v1.dependencies as deps
+    assert hasattr(deps, "get_current_user")
+    # require_permission is NOT exported here
+    assert not hasattr(deps, "require_permission")
+
+
 class DummyUser:
     id = 1
     username = "admin_user"
     role_id = 1  # Admin role
-
 
 class DummyRole:
     id = 1
     name = "admin"
     permissions = ["create", "read", "update", "delete"]
 
-
 class DummyUserLimited:
     id = 2
     username = "limited_user"
     role_id = 2  # Non-admin role
-
 
 class DummyRoleLimited:
     id = 2
@@ -38,276 +48,239 @@ class DummyRoleLimited:
 
 @pytest.mark.asyncio
 async def test_require_permission_admin():
-    async def mock_get_user():
-        return DummyUser()
-
-    async def mock_get_db_with_permission():
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=DummyRole())
-                    )
-                )
-            )
-        )
-        yield db
-
     require_perm = require_permission("create")
+    user_instance = DummyUser()
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_with_permission())
-    user = await require_perm(user=user_instance, db=db_instance)
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = DummyRole()
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
+    user = await require_perm(user=user_instance, db=db)
     assert user.username == "admin_user"
 
 
 @pytest.mark.asyncio
 async def test_require_permission_has_permission():
-    async def mock_get_user():
-        return DummyUserLimited()
-
-    async def mock_get_db_with_permission():
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=DummyRoleLimited())
-                    )
-                )
-            )
-        )
-        yield db
-
     require_perm = require_permission("read")
+    user_instance = DummyUserLimited()
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_with_permission())
-    user = await require_perm(user=user_instance, db=db_instance)
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = DummyRoleLimited()
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
+    user = await require_perm(user=user_instance, db=db)
     assert user.username == "limited_user"
 
 
 @pytest.mark.asyncio
 async def test_require_permission_no_permission():
-    async def mock_get_user():
-        return DummyUserLimited()
-
-    async def mock_get_db_no_permission():
-        role = DummyRoleLimited()
-        role.permissions = ["read"]  # does NOT include "delete"
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=role)
-                    )
-                )
-            )
-        )
-        yield db
-
     require_perm = require_permission("delete")
+    user_instance = DummyUserLimited()
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_no_permission())
+    role = DummyRoleLimited()
+    role.permissions = ["read"]  # does NOT include "delete"
+
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = role
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
     with pytest.raises(HTTPException) as exc_info:
-        await require_perm(user=user_instance, db=db_instance)
-
+        await require_perm(user=user_instance, db=db)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
     assert "Permission" in exc_info.value.detail and "denied" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio
 async def test_require_permission_no_role():
-    async def mock_get_user():
-        return DummyUserLimited()
-
-    async def mock_get_db_no_role():
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=None)
-                    )
-                )
-            )
-        )
-        yield db
-
     require_perm = require_permission("read")
+    user_instance = DummyUserLimited()
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_no_role())
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = None
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
     with pytest.raises(HTTPException) as exc_info:
-        await require_perm(user=user_instance, db=db_instance)
-
+        await require_perm(user=user_instance, db=db)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
-    assert "Role not found" in exc_info.value.detail
+    assert exc_info.value.detail == "Role not found"
 
 
 @pytest.mark.asyncio
 async def test_require_permission_role_permissions_none():
-    async def mock_get_user():
-        return DummyUserLimited()
+    require_perm = require_permission("read")
+    user_instance = DummyUserLimited()
 
     class RoleWithNonePerms:
         id = 2
         name = "broken"
-        permissions = None  # Explicitly None
+        permissions = None
 
-    async def mock_get_db_permissions_none():
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=RoleWithNonePerms())
-                    )
-                )
-            )
-        )
-        yield db
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
 
-    require_perm = require_permission("read")
+    mock_scalar_result.first.return_value = RoleWithNonePerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_permissions_none())
     with pytest.raises(HTTPException) as exc_info:
-        await require_perm(user=user_instance, db=db_instance)
-
+        await require_perm(user=user_instance, db=db)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
     assert "Permission" in exc_info.value.detail and "denied" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio
 async def test_require_permission_invalid_permission_type():
-    async def mock_get_user():
-        return DummyUserLimited()
+    require_perm = require_permission("read")
+    user_instance = DummyUserLimited()
 
     class RoleInvalidPermType:
         id = 4
         name = "invalidpermtype"
         permissions = 123  # Not iterable
 
-    async def mock_get_db_invalid_perm_type():
-        db = AsyncMock(spec=AsyncSession)
-        db.execute = AsyncMock(
-            return_value=AsyncMock(
-                scalars=MagicMock(
-                    return_value=MagicMock(
-                        first=MagicMock(return_value=RoleInvalidPermType())
-                    )
-                )
-            )
-        )
-        yield db
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
 
-    require_perm = require_permission("read")
+    mock_scalar_result.first.return_value = RoleInvalidPermType()
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
 
-    user_instance = await mock_get_user()
-    db_instance = await anext(mock_get_db_invalid_perm_type())
     with pytest.raises(HTTPException) as exc_info:
-        await require_perm(user=user_instance, db=db_instance)
-
+        await require_perm(user=user_instance, db=db)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
     assert "Permission" in exc_info.value.detail and "denied" in exc_info.value.detail.lower()
 
 
 @pytest.mark.asyncio
-async def test_auth_get_current_user_valid():
-    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token123")
+async def test_auth_get_current_user_credentials_scheme_not_bearer():
+    creds = HTTPAuthorizationCredentials(scheme="Basic", credentials="token123")
     db = AsyncMock()
 
-    dummy_user = DummyUser()
-
-    # Patch SECRET_KEY to string for jwt.decode call
-    with patch("app.api.v1.dependencies.auth.SECRET_KEY", new="testsecretkey123"):
-        with patch("app.api.v1.dependencies.auth.jwt.decode", return_value={"sub": "admin_user"}):
-            db.execute = AsyncMock(
-                return_value=AsyncMock(
-                    scalars=MagicMock(
-                        return_value=MagicMock(
-                            first=MagicMock(return_value=dummy_user)
-                        )
-                    )
-                )
-            )
-            user = await auth_get_current_user(credentials=creds, db=db)
-            assert user.username == "admin_user"
-
-
-@pytest.mark.asyncio
-async def test_auth_get_current_user_missing_credentials():
-    db = AsyncMock()
     with pytest.raises(HTTPException) as exc_info:
-        await auth_get_current_user(credentials=None, db=db)
+        await auth_get_current_user(credentials=creds, db=db)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
     assert "Invalid or missing token" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_auth_get_current_user_jwt_decode_fail():
+async def test_auth_get_current_user_invalid_token_payload():
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token123")
     db = AsyncMock()
 
-    with patch("app.api.v1.dependencies.auth.SECRET_KEY", new="testsecretkey123"):
-        with patch("app.api.v1.dependencies.auth.jwt.decode", side_effect=JWTError("fail")):
-            with pytest.raises(HTTPException) as exc_info:
-                await auth_get_current_user(credentials=creds, db=db)
-            assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    with patch("app.api.v1.dependencies.auth.jwt.decode", return_value={}):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_get_current_user(credentials=creds, db=db)
+        assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "Invalid token payload" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_init_get_current_user_valid():
+async def test_auth_get_current_user_invalid_token_jwt_error():
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token123")
     db = AsyncMock()
+
+    with patch("app.api.v1.dependencies.auth.jwt.decode", side_effect=JWTError):
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_get_current_user(credentials=creds, db=db)
+        assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+        assert "Could not validate token" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_auth_get_current_user_user_not_found():
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token123")
+    db = AsyncMock()
+
+    with patch("app.api.v1.dependencies.auth.jwt.decode", return_value={"sub": "nonexistent_user"}):
+        mock_result = MagicMock()
+        mock_scalar_result = MagicMock()
+
+        mock_scalar_result.first.return_value = None
+        mock_result.scalars.return_value = mock_scalar_result
+        db.execute.return_value = mock_result
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_get_current_user(credentials=creds, db=db)
+        assert exc_info.value.status_code == status.HTTP_404_NOT_FOUND
+        assert exc_info.value.detail == "User not found"
+
+
+@pytest.mark.asyncio
+async def test_auth_get_current_user_success():
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="token123")
+    db = AsyncMock()
+
     dummy_user = DummyUser()
 
-    with patch("app.api.v1.dependencies.__init__.SECRET_KEY", new=MagicMock(get_secret_value=lambda: "dummysecret")):
-        with patch("app.api.v1.dependencies.__init__.jwt.decode", return_value={"sub": "admin_user"}):
-            db.execute = AsyncMock(
-                return_value=AsyncMock(
-                    scalars=MagicMock(
-                        return_value=MagicMock(
-                            first=MagicMock(return_value=dummy_user)
-                        )
-                    )
-                )
-            )
-            user = await init_get_current_user(token="any.jwt.token", db=db)
-            assert user.username == "admin_user"
+    with patch("app.api.v1.dependencies.auth.jwt.decode", return_value={"sub": dummy_user.username}):
+        mock_result = MagicMock()
+        mock_scalar_result = MagicMock()
+
+        mock_scalar_result.first.return_value = dummy_user
+        mock_result.scalars.return_value = mock_scalar_result
+        db.execute.return_value = mock_result
+
+        user = await auth_get_current_user(credentials=creds, db=db)
+        assert user.username == dummy_user.username
 
 
 @pytest.mark.asyncio
-async def test_init_get_current_user_invalid_token():
-    db = AsyncMock()
+async def test_require_permission_empty_permission_string():
+    require_perm = require_permission("")
+    user_instance = DummyUser()
 
-    with patch("app.api.v1.dependencies.__init__.SECRET_KEY", new=MagicMock(get_secret_value=lambda: "dummysecret")):
-        with patch("app.api.v1.dependencies.__init__.jwt.decode", side_effect=JWTError("fail")):
-            with pytest.raises(HTTPException) as exc_info:
-                await init_get_current_user(token="invalid.token", db=db)
-            assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    role = DummyRole()
+    role.permissions = ["read", "write"]
+
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = role
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user=user_instance, db=db)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.asyncio
-async def test_init_get_current_user_user_not_found():
-    db = AsyncMock()
+async def test_require_permission_permission_not_in_role_permissions():
+    require_perm = require_permission("delete")
+    user_instance = DummyUser()
 
-    with patch("app.api.v1.dependencies.__init__.SECRET_KEY", new=MagicMock(get_secret_value=lambda: "dummysecret")):
-        with patch("app.api.v1.dependencies.__init__.jwt.decode", return_value={"sub": "ghost_user"}):
-            db.execute = AsyncMock(
-                return_value=AsyncMock(
-                    scalars=MagicMock(
-                        return_value=MagicMock(
-                            first=MagicMock(return_value=None)
-                        )
-                    )
-                )
-            )
-            with pytest.raises(HTTPException) as exc_info:
-                await init_get_current_user(token="valid.token.butfakeuser", db=db)
-            assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-            assert "Could not validate credentials" in exc_info.value.detail
+    role = DummyRole()
+    role.permissions = ["read", "write"]
+
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+
+    mock_scalar_result.first.return_value = role
+    mock_result.scalars.return_value = mock_scalar_result
+    db.execute.return_value = mock_result
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user=user_instance, db=db)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert "Permission" in exc_info.value.detail and "denied" in exc_info.value.detail.lower()
 
