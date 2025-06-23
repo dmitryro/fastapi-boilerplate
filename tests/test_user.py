@@ -79,7 +79,7 @@ def user_model_stub(**kwargs):
         id=kwargs.get("id", 1),
         email=kwargs.get("email", "user@example.com"),
         username=kwargs.get("username", "user"),
-        password="hashedpw",
+        password=kwargs.get("password", "hashedpw"),
         role_id=kwargs.get("role_id", 2),
         first=kwargs.get("first", "First"),
         last=kwargs.get("last", "Last"),
@@ -87,6 +87,26 @@ def user_model_stub(**kwargs):
         created_at=kwargs.get("created_at", datetime.now(timezone.utc)),
         updated_at=kwargs.get("updated_at", datetime.now(timezone.utc)),
     )
+
+@pytest.mark.asyncio
+async def test_user_password_methods():
+    """Test User model's password hashing and verification methods."""
+    user = user_model_stub()
+    plain_password = "SecurePass123!"
+    
+    # Test set_password
+    logger.debug("Testing set_password")
+    user.set_password(plain_password)
+    assert user.password != plain_password  # Password should be hashed
+    assert user.password.startswith("$argon2id$")  # Verify Argon2 hash format
+    
+    # Test verify_password with correct password
+    logger.debug("Testing verify_password with correct password")
+    assert user.verify_password(plain_password) is True
+    
+    # Test verify_password with incorrect password
+    logger.debug("Testing verify_password with incorrect password")
+    assert user.verify_password("WrongPass123!") is False
 
 @pytest.mark.asyncio
 async def test_create_user(async_client, monkeypatch):
