@@ -146,9 +146,9 @@ def require_permission(permission: str):
 
         perms = getattr(role, "permissions", None)
 
-        # Ensure perms is explicitly an iterable of the correct types and not empty.
-        # This robust check covers None, non-list/tuple/set, or empty iterables.
-        if not isinstance(perms, (list, tuple, set)) or not perms:
+        # Line 160: Refactored for clearer logical coverage.
+        # This condition checks if `perms` is not a standard iterable collection (list, tuple, set) OR if it's empty/falsy.
+        if not (isinstance(perms, (list, tuple, set)) and perms):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied")
 
         # Now safely check membership, wrapping in try-except to catch any other unexpected errors.

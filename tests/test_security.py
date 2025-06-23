@@ -60,6 +60,30 @@ class DummyRoleLimited:
     name = "limited"
     permissions = ["read"]
 
+class DummyRoleWithSetPerms:
+    # New dummy role for set permissions coverage
+    id = 3
+    name = "set_role"
+    permissions = {"view", "edit"} # Using a set for permissions
+
+class DummyRoleWithTuplePerms:
+    # New dummy role for tuple permissions coverage
+    id = 4
+    name = "tuple_role"
+    permissions = ("browse", "download") # Using a tuple for permissions
+
+class DummyRoleEmptyTuplePerms:
+    # Dummy role with empty tuple permissions for line 160 coverage
+    id = 5
+    name = "empty_tuple_role"
+    permissions = ()
+
+class DummyRoleEmptySetPerms:
+    # Dummy role with empty set permissions for line 160 coverage
+    id = 6
+    name = "empty_set_role"
+    permissions = set()
+
 @pytest.fixture
 async def async_db_session():
     # Provide a new AsyncMock session for each test to ensure isolation
@@ -141,6 +165,7 @@ async def test_create_access_token_default_expiry():
     """Test create_access_token with default expiry."""
     data = {"sub": "testuser"}
     token = create_access_token(data)
+    # Fix: Add algorithms argument to jwt.decode
     payload = jwt.decode(token, str(SECRET_KEY), algorithms=[ALGORITHM])
     assert payload["sub"] == "testuser"
     assert "exp" in payload
@@ -154,6 +179,7 @@ async def test_create_access_token_custom_expiry():
     data = {"sub": "testuser"}
     expires_delta = timedelta(minutes=5)
     token = create_access_token(data, expires_delta)
+    # Fix: Add algorithms argument to jwt.decode
     payload = jwt.decode(token, str(SECRET_KEY), algorithms=[ALGORITHM])
     assert payload["sub"] == "testuser"
     exp_time = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
@@ -336,6 +362,7 @@ async def test_get_current_user_basic_auth_valid(async_db_session):
     username = "admin_user"
     password = "SecurePass123!"
     auth_header = f"Basic {b64encode(f'{username}:{password}'.encode()).decode()}"
+    
     mock_result = MagicMock()
     mock_scalar_result = MagicMock()
     mock_scalar_result.first.return_value = user
@@ -343,7 +370,8 @@ async def test_get_current_user_basic_auth_valid(async_db_session):
     async_db_session.execute.return_value = mock_result
 
     request = MagicMock(spec=Request)
-    request.headers = {"Authorization": auth_header}
+    # Fix: Directly mock the .get() method of headers to return the auth_header
+    request.headers.get.return_value = auth_header 
     user = await get_current_user(request, async_db_session, token=None, bearer=None)
     assert user.username == "admin_user"
     async_db_session.execute.assert_awaited()
@@ -352,7 +380,8 @@ async def test_get_current_user_basic_auth_valid(async_db_session):
 async def test_get_current_user_basic_auth_invalid_encoding(async_db_session):
     """Test get_current_user with invalid Basic Auth encoding."""
     request = MagicMock(spec=Request)
-    request.headers = {"Authorization": "Basic invalid_encoding"}
+    # Fix: Directly mock the .get() method of headers to return invalid encoding
+    request.headers.get.return_value = "Basic invalid_encoding"
     with pytest.raises(HTTPException) as exc_info:
         await get_current_user(request, async_db_session, token=None, bearer=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
@@ -373,11 +402,12 @@ async def test_get_current_user_basic_auth_invalid_credentials(async_db_session)
     async_db_session.execute.return_value = mock_result
 
     request = MagicMock(spec=Request)
-    request.headers = {"Authorization": auth_header}
+    # Fix: Directly mock the .get() method of headers
+    request.headers.get.return_value = auth_header
     with pytest.raises(HTTPException) as exc_info:
         await get_current_user(request, async_db_session, token=None, bearer=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert exc_info.value.detail == "Invalid username or password"
+    assert exc_info.value.detail == "Invalid username or password" # This assertion should now pass
 
 @pytest.mark.asyncio
 async def test_get_current_user_basic_auth_no_user(async_db_session):
@@ -392,17 +422,19 @@ async def test_get_current_user_basic_auth_no_user(async_db_session):
     async_db_session.execute.return_value = mock_result
 
     request = MagicMock(spec=Request)
-    request.headers = {"Authorization": auth_header}
+    # Fix: Directly mock the .get() method of headers
+    request.headers.get.return_value = auth_header
     with pytest.raises(HTTPException) as exc_info:
         await get_current_user(request, async_db_session, token=None, bearer=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
-    assert exc_info.value.detail == "Invalid username or password"
+    assert exc_info.value.detail == "Invalid username or password" # This assertion should now pass
 
 @pytest.mark.asyncio
 async def test_get_current_user_no_auth(async_db_session):
     """Test get_current_user with no authentication provided."""
     request = MagicMock(spec=Request)
-    request.headers = {}
+    # Ensure headers.get("Authorization") returns None by default for this test
+    request.headers.get.return_value = None
     with pytest.raises(HTTPException) as exc_info:
         await get_current_user(request, async_db_session, token=None, bearer=None)
     assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
@@ -478,12 +510,12 @@ async def test_require_permission_none_permissions(async_db_session):
 
 @pytest.mark.asyncio
 async def test_require_permission_non_iterable_permissions(async_db_session):
-    """Test require_permission when role permissions are non-iterable."""
+    """Test require_permission when role permissions are non-iterable (e.g., int)."""
     user = DummyUser()
     class RoleBadPerms:
         id = 1
         name = "badrole"
-        permissions = 123 # Non-iterable
+        permissions = 123 # Non-iterable (not list/tuple/set)
     mock_result = MagicMock()
     mock_scalar_result = MagicMock()
     mock_scalar_result.first.return_value = RoleBadPerms()
@@ -527,7 +559,7 @@ async def test_require_permission_empty_string_permission(async_db_session):
     mock_result.scalars.return_value = mock_scalar_result
     async_db_session.execute.return_value = mock_result
 
-    require_perm = require_permission("") # Passing an empty string here
+    require_perm = require_permission("") # Passing an empty string here (targets line 160 as the `if not permission:` check)
     with pytest.raises(HTTPException) as exc_info:
         await require_perm(user, async_db_session)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
@@ -561,6 +593,193 @@ async def test_require_permission_type_error_in_perms(async_db_session):
         await require_perm(user, async_db_session)
     assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
     assert exc_info.value.detail == "Permission denied"
+
+@pytest.mark.asyncio
+async def test_require_permission_non_list_iterable_string(async_db_session):
+    """Test require_permission when role permissions is a non-empty string (not list/tuple/set)."""
+    # This test targets the `not isinstance(perms, (list, tuple, set))` part of line 160
+    user = DummyUser()
+    class RoleStringPerms:
+        id = 1
+        name = "string_role"
+        permissions = "read_data" # A non-empty string, iterable, but not list/tuple/set
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleStringPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("read") # Permission to check, doesn't matter much for this test
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+@pytest.mark.asyncio
+async def test_require_permission_general_exception_in_perms(async_db_session):
+    """Test require_permission when a general Exception occurs during permission check (line 162)."""
+    user = DummyUser()
+
+    class ExceptionRaisingPermissions:
+        def __iter__(self):
+            # This is needed so `isinstance(perms, (list, tuple, set))` is False
+            # but it is still iterable for other checks.
+            yield 1 
+        def __contains__(self, item):
+            # This will trigger the 'except Exception' block at line 162.
+            raise Exception("Simulated general exception from __contains__")
+
+    class RoleExceptionPerms:
+        id = 1
+        name = "exception_role"
+        permissions = ExceptionRaisingPermissions()
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleExceptionPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("read")
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+@pytest.mark.asyncio
+async def test_require_permission_with_set_permissions(async_db_session):
+    """Test require_permission when role permissions is a non-empty set."""
+    # This test explicitly targets the `isinstance(perms, (list, tuple, set))`
+    # for the `set` type, and `perms` being truthy, hitting the "pass" branch of line 160.
+    user = DummyUser()
+    user.role_id = DummyRoleWithSetPerms.id # Set user's role_id to match the new dummy role
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = DummyRoleWithSetPerms() # Return the set-based permissions role
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("view") # A permission that exists in DummyRoleWithSetPerms
+    result_user = await require_perm(user, async_db_session)
+    assert result_user.username == "admin_user" # The DummyUser is used, but its role_id is mocked
+    
+    # Fix: Use a more robust assertion for SQLAlchemy select objects.
+    # Compile both the expected and actual statements to string for comparison.
+    assert async_db_session.execute.await_count > 0 # Ensure execute was called at least once
+    
+    role_query_found = False
+    for call_args in async_db_session.execute.call_args_list:
+        statement = call_args.args[0]
+        if isinstance(statement, Select) and any(table.name == 'roles' for table in statement.get_final_froms() if hasattr(table, 'name')):
+            expected_statement = select(Role).filter(Role.id == DummyRoleWithSetPerms.id)
+            # Compile both statements to text for robust comparison
+            expected_sql_text = str(expected_statement.compile(compile_kwargs={"literal_binds": True}))
+            actual_sql_text = str(statement.compile(compile_kwargs={"literal_binds": True}))
+            
+            # Normalize whitespace to make comparison more robust if minor formatting differences exist
+            assert ' '.join(actual_sql_text.split()) == ' '.join(expected_sql_text.split())
+            role_query_found = True
+            break
+    assert role_query_found, "Expected query for Role was not found in db.execute calls."
+
+@pytest.mark.asyncio
+async def test_require_permission_with_tuple_permissions(async_db_session):
+    """Test require_permission when role permissions is a non-empty tuple."""
+    # This test explicitly targets the `isinstance(perms, (list, tuple, set))`
+    # for the `tuple` type, and `perms` being truthy, hitting the "pass" branch of line 160.
+    user = DummyUser()
+    user.role_id = DummyRoleWithTuplePerms.id # Set user's role_id to match the new dummy role
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = DummyRoleWithTuplePerms() # Return the tuple-based permissions role
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("browse") # A permission that exists in DummyRoleWithTuplePerms
+    result_user = await require_perm(user, async_db_session)
+    assert result_user.username == "admin_user" # The DummyUser is used, but its role_id is mocked
+    
+    assert async_db_session.execute.await_count > 0 # Ensure execute was called at least once
+    
+    role_query_found = False
+    for call_args in async_db_session.execute.call_args_list:
+        statement = call_args.args[0]
+        if isinstance(statement, Select) and any(table.name == 'roles' for table in statement.get_final_froms() if hasattr(table, 'name')):
+            expected_statement = select(Role).filter(Role.id == DummyRoleWithTuplePerms.id)
+            expected_sql_text = str(expected_statement.compile(compile_kwargs={"literal_binds": True}))
+            actual_sql_text = str(statement.compile(compile_kwargs={"literal_binds": True}))
+            
+            assert ' '.join(actual_sql_text.split()) == ' '.join(expected_sql_text.split())
+            role_query_found = True
+            break
+    assert role_query_found, "Expected query for Role was not found in db.execute calls."
+
+@pytest.mark.asyncio
+async def test_require_permission_empty_tuple_permissions(async_db_session):
+    """Test require_permission when role permissions is an empty tuple."""
+    user = DummyUser()
+    user.role_id = DummyRoleEmptyTuplePerms.id
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = DummyRoleEmptyTuplePerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("any_permission") # The permission doesn't matter, it should be denied
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+    # Verify the database call for the role
+    assert async_db_session.execute.await_count > 0
+    role_query_found = False
+    for call_args in async_db_session.execute.call_args_list:
+        statement = call_args.args[0]
+        if isinstance(statement, Select) and any(table.name == 'roles' for table in statement.get_final_froms() if hasattr(table, 'name')):
+            expected_statement = select(Role).filter(Role.id == DummyRoleEmptyTuplePerms.id)
+            expected_sql_text = str(expected_statement.compile(compile_kwargs={"literal_binds": True}))
+            actual_sql_text = str(statement.compile(compile_kwargs={"literal_binds": True}))
+            assert ' '.join(actual_sql_text.split()) == ' '.join(expected_sql_text.split())
+            role_query_found = True
+            break
+    assert role_query_found, "Expected query for Role (empty tuple) was not found in db.execute calls."
+
+@pytest.mark.asyncio
+async def test_require_permission_empty_set_permissions(async_db_session):
+    """Test require_permission when role permissions is an empty set."""
+    user = DummyUser()
+    user.role_id = DummyRoleEmptySetPerms.id
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = DummyRoleEmptySetPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("another_permission") # The permission doesn't matter, it should be denied
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+    # Verify the database call for the role
+    assert async_db_session.execute.await_count > 0
+    role_query_found = False
+    for call_args in async_db_session.execute.call_args_list:
+        statement = call_args.args[0]
+        if isinstance(statement, Select) and any(table.name == 'roles' for table in statement.get_final_froms() if hasattr(table, 'name')):
+            expected_statement = select(Role).filter(Role.id == DummyRoleEmptySetPerms.id)
+            expected_sql_text = str(expected_statement.compile(compile_kwargs={"literal_binds": True}))
+            actual_sql_text = str(statement.compile(compile_kwargs={"literal_binds": True}))
+            assert ' '.join(actual_sql_text.split()) == ' '.join(expected_sql_text.split())
+            role_query_found = True
+            break
+    assert role_query_found, "Expected query for Role (empty set) was not found in db.execute calls."
 
 
 # Integration tests

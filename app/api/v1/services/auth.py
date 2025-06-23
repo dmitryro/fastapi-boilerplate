@@ -63,8 +63,8 @@ class AuthService:
             password=hashed_pw,
             phone=reg.phone,
             role_id=reg.role_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=datetime.utcnow(), # These datetimes are timezone-naive
+            updated_at=datetime.utcnow(), # These datetimes are timezone-naive
         )
         self.db.add(new_user)
         await self.db.commit()
@@ -110,7 +110,8 @@ class AuthService:
         login_record = Login(
             username=user.username,
             password=hashed_pw,
-            login_time=datetime.now(timezone.utc)
+            # Fix: Convert timezone-aware datetime to timezone-naive for TIMESTAMP WITHOUT TIME ZONE
+            login_time=datetime.now(timezone.utc).replace(tzinfo=None) 
         )
         self.db.add(login_record)
         await self.db.commit()
