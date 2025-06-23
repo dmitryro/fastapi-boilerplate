@@ -6,6 +6,8 @@ from httpx import AsyncClient
 from httpx._transports.asgi import ASGITransport
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select # Function for building SELECT statements
+from sqlalchemy.sql.selectable import Select # Type for checking SELECT statement instances
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 import logging
@@ -13,6 +15,7 @@ import logging
 from app.api.v1.security.jwt import decode_jwt, create_access_token, get_current_user, require_permission, oauth2_scheme, bearer_scheme
 from app.api.v1.security.passwords import hash_password, verify_password
 from app.api.v1.models.user import User as UserModel
+from app.api.v1.models.role import Role # Import Role model for side_effect mocking
 from app.core.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from app.core.db.session import get_db
 
@@ -25,12 +28,14 @@ class DummyUser:
     id = 1
     username = "admin_user"
     role_id = 1
-    password = None
+    password = None # This will be set by set_password mock
 
     def verify_password(self, plain_password):
+        # Use the real verify_password from the app's security module
         return verify_password(self.password, plain_password)
 
     def set_password(self, password):
+        # Use the real hash_password from the app's security module
         self.password = hash_password(password)
 
 class DummyRole:
@@ -57,36 +62,39 @@ class DummyRoleLimited:
 
 @pytest.fixture
 async def async_db_session():
+    # Provide a new AsyncMock session for each test to ensure isolation
     session = AsyncMock(spec=AsyncSession)
     yield session
 
 @pytest.fixture
-def app():
-    app = FastAPI()
+def app_with_security_routes():
+    # Use a different fixture name to avoid confusion with `app` in conftest.py
+    # This app is specifically for testing the routes with security dependencies
+    app_instance = FastAPI()
     
-    @app.get("/test-jwt")
-    async def test_jwt(user: UserModel = Depends(get_current_user)):
+    @app_instance.get("/test-jwt")
+    async def test_jwt_route(user: UserModel = Depends(get_current_user)):
         return {"username": user.username}
     
-    @app.get("/test-permission")
-    async def test_permission(user: UserModel = Depends(require_permission("read"))):
+    @app_instance.get("/test-permission")
+    async def test_permission_route(user: UserModel = Depends(require_permission("read"))):
         return {"username": user.username}
     
-    return app
+    return app_instance
 
 @pytest.fixture
-async def async_client(app, async_db_session):
+async def async_client_for_security_tests(app_with_security_routes, async_db_session):
     async def override_get_db():
         yield async_db_session
     
-    async def override_get_current_user():
-        return DummyUser()
+    app_with_security_routes.dependency_overrides[get_db] = override_get_db
+    
+    # We are explicitly NOT overriding get_current_user here
+    # because we want the integration tests to hit the *actual* get_current_user logic.
 
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[get_current_user] = override_get_current_user
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(transport=ASGITransport(app=app_with_security_routes), base_url="http://test") as client:
         yield client
-    app.dependency_overrides.clear()
+    app_with_security_routes.dependency_overrides.clear() # Clear overrides after the test
 
 # Tests for app/api/v1/security/passwords.py
 @pytest.mark.asyncio
@@ -179,6 +187,21 @@ async def test_get_current_user_oauth2_invalid_token(async_db_session):
     assert exc_info.value.detail == "Invalid Bearer token"
 
 @pytest.mark.asyncio
+async def test_get_current_user_oauth2_expired_token(async_db_session):
+    """Test get_current_user with an expired OAuth2 token."""
+    expired_payload = {"sub": "expired_user", "exp": (datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()}
+    expired_token = jwt.encode(expired_payload, str(SECRET_KEY), algorithm=ALGORITHM)
+
+    request = MagicMock(spec=Request)
+    request.headers = {}
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request, async_db_session, token=expired_token, bearer=None)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Token expired"
+    assert exc_info.value.headers == {"WWW-Authenticate": "Bearer"}
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_oauth2_no_sub(async_db_session):
     """Test get_current_user with OAuth2 token missing sub claim."""
     token = jwt.encode({}, str(SECRET_KEY), algorithm=ALGORITHM)
@@ -233,8 +256,24 @@ async def test_get_current_user_bearer_invalid_token(async_db_session):
     assert exc_info.value.detail == "Invalid Bearer token"
 
 @pytest.mark.asyncio
+async def test_get_current_user_bearer_expired_token(async_db_session):
+    """Test get_current_user with an expired HTTPBearer token."""
+    expired_payload = {"sub": "expired_user", "exp": (datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()}
+    expired_token = jwt.encode(expired_payload, str(SECRET_KEY), algorithm=ALGORITHM)
+    bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials=expired_token)
+
+    request = MagicMock(spec=Request)
+    request.headers = {}
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request, async_db_session, token=None, bearer=bearer)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Token expired"
+    assert exc_info.value.headers == {"WWW-Authenticate": "Bearer"}
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_bearer_invalid_scheme(async_db_session):
-    """Test get_current_user with invalid Bearer scheme."""
+    """Test get_current_user with invalid Bearer scheme. This should fall to no-auth or basic auth."""
     bearer = HTTPAuthorizationCredentials(scheme="Basic", credentials="token")
     request = MagicMock(spec=Request)
     request.headers = {}
@@ -242,6 +281,7 @@ async def test_get_current_user_bearer_invalid_scheme(async_db_session):
         await get_current_user(request, async_db_session, token=None, bearer=bearer)
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Not authenticated"
+
 
 @pytest.mark.asyncio
 async def test_get_current_user_basic_auth_valid(async_db_session):
@@ -441,55 +481,135 @@ async def test_require_permission_empty_string_permission(async_db_session):
     mock_result.scalars.return_value = mock_scalar_result
     async_db_session.execute.return_value = mock_result
 
-    require_perm = require_permission("")
+    require_perm = require_permission("") # Passing an empty string here
     with pytest.raises(HTTPException) as exc_info:
         await require_perm(user, async_db_session)
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Permission denied"
 
-# Integration tests
 @pytest.mark.asyncio
-async def test_jwt_oauth2_integration(async_client, async_db_session):
+async def test_require_permission_type_error_in_perms(async_db_session): # NEW TEST for line 136
+    """Test require_permission when 'in' operator on permissions raises TypeError."""
+    user = DummyUser()
+
+    class BuggyPermissions:
+        # This object will claim to be iterable (has __iter__) but will raise TypeError
+        # when __contains__ is called, simulating an unexpected type or corrupted iterable.
+        def __iter__(self):
+            yield 1 # Must yield at least one item to satisfy 'hasattr(perms, "__iter__")' check
+
+        def __contains__(self, item):
+            # Explicitly raise TypeError when 'in' operator is used.
+            raise TypeError("Simulated TypeError from __contains__")
+
+    class RoleBuggyPerms:
+        id = 1
+        name = "buggy"
+        permissions = BuggyPermissions()
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleBuggyPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("read")
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Permission denied"
+
+
+# Integration tests (MODIFIED to run actual get_current_user)
+@pytest.mark.asyncio
+async def test_jwt_oauth2_integration(async_client_for_security_tests, async_db_session):
     """Test JWT authentication via OAuth2 token."""
+    # Mock db.execute for get_current_user to return a user
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = DummyUser()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
     token = jwt.encode({"sub": "admin_user"}, str(SECRET_KEY), algorithm=ALGORITHM)
-    response = await async_client.get(
+    response = await async_client_for_security_tests.get(
         "/test-jwt",
         headers={"Authorization": f"Bearer {token}"}
     )
     logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"username": "admin_user"}
+    async_db_session.execute.assert_awaited() # Ensure DB query was called
 
 @pytest.mark.asyncio
-async def test_jwt_basic_auth_integration(async_client, async_db_session):
+async def test_jwt_basic_auth_integration(async_client_for_security_tests, app_with_security_routes, async_db_session):
     """Test Basic Auth integration."""
     user = DummyUser()
-    user.set_password("SecurePass123!")
+    user.set_password("SecurePass123!") # Set password for basic auth verification
+    
+    # Mock db.execute for get_current_user to return the user
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = user
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    # Temporarily override OAuth2PasswordBearer and HTTPBearer to return None
+    # for this specific test, allowing the Basic Auth path to be hit without interference.
+    async def mock_oauth2_scheme():
+        return None
+    async def mock_bearer_scheme():
+        return None
+    app_with_security_routes.dependency_overrides[oauth2_scheme] = mock_oauth2_scheme
+    app_with_security_routes.dependency_overrides[bearer_scheme] = mock_bearer_scheme
+
     auth_header = f"Basic {b64encode(b'admin_user:SecurePass123!').decode()}"
-    response = await async_client.get(
+    response = await async_client_for_security_tests.get(
         "/test-jwt",
         headers={"Authorization": auth_header}
     )
     logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"username": "admin_user"}
+    async_db_session.execute.assert_awaited()
+    
+    # Clean up overrides after test
+    del app_with_security_routes.dependency_overrides[oauth2_scheme]
+    del app_with_security_routes.dependency_overrides[bearer_scheme]
+
 
 @pytest.mark.asyncio
-async def test_permission_integration(async_client, app, async_db_session):
+async def test_permission_integration(async_client_for_security_tests, async_db_session):
     """Test permission check integration."""
-    async def dummy_get_current_user():
-        return DummyUser()
-    app.dependency_overrides[get_current_user] = dummy_get_current_user
-    mock_result = MagicMock()
-    mock_scalar_result = MagicMock()
-    mock_scalar_result.first.return_value = DummyRole()
-    mock_result.scalars.return_value = mock_scalar_result
-    async_db_session.execute.return_value = mock_result
+    # Mock db.execute to return user for get_current_user and role for require_permission
+    async def mock_execute_side_effect(statement):
+        # Check if the query is for User or Role model
+        if isinstance(statement, Select) and any(table.name == 'users' for table in statement.froms if hasattr(table, 'name')):
+            mock_user_result = MagicMock()
+            mock_user_scalar_result = MagicMock()
+            mock_user_scalar_result.first.return_value = DummyUser()
+            mock_user_result.scalars.return_value = mock_user_scalar_result
+            return mock_user_result
+        elif isinstance(statement, Select) and any(table.name == 'roles' for table in statement.froms if hasattr(table, 'name')):
+            mock_role_result = MagicMock()
+            mock_role_scalar_result = MagicMock()
+            mock_role_scalar_result.first.return_value = DummyRole()
+            mock_role_result.scalars.return_value = mock_role_scalar_result
+            return mock_role_result
+        raise ValueError(f"Unexpected query: {statement}")
 
-    response = await async_client.get(
+    async_db_session.execute.side_effect = mock_execute_side_effect
+
+    # Provide a valid token so get_current_user succeeds
+    token = jwt.encode({"sub": "admin_user"}, str(SECRET_KEY), algorithm=ALGORITHM)
+    response = await async_client_for_security_tests.get(
         "/test-permission",
-        headers={"Authorization": "Bearer fake-token"}
+        headers={"Authorization": f"Bearer {token}"}
     )
     logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"username": "admin_user"}
+    # Assert that db.execute was called multiple times (once for user, once for role)
+    assert async_db_session.execute.call_count >= 2
+
+

@@ -1,13 +1,13 @@
 import logging
 import sys
-
+import os
 from app.core.logging import InterceptHandler
 from loguru import logger
 from starlette.config import Config
 from starlette.datastructures import Secret
 
 # Load .env
-config = Config(".env")
+config = Config(".env" if os.path.exists(".env") else "")
 
 # Core App Settings
 API_PREFIX = "/api/v1"

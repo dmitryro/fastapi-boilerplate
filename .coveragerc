@@ -1,0 +1,18 @@
+[run]
+source =
+    app/api/v1/security/jwt.py
+    app/api/v1/security/passwords.py
+branch = True
+concurrency = multiprocessing,thread,gevent
+
+[report]
+show_missing = True
+skip_covered = False
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    def __repr__
+    def __str__
+
+[html]
+directory = htmlcov

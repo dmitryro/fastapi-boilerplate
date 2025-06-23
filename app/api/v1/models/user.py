@@ -33,4 +33,3 @@ class User(Base):
     def set_password(self, plain_password: str):
         """Hash and set password."""
         self.password = ph.hash(plain_password)
-
