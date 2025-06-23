@@ -2,6 +2,7 @@ aiocache
 alembic
 anyio
 argon2-cffi
+asgi-lifespan
 asyncpg
 bcrypt
 build
