@@ -13,6 +13,7 @@ from app.api.v1.schemas.user import UserCreate, UserUpdate
 from datetime import datetime, timezone
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError # Import SQLAlchemyError
 import logging
 
 # Set up logging for debugging
@@ -91,9 +92,9 @@ def user_model_stub(**kwargs):
         created_at=kwargs.get("created_at", datetime.now(timezone.utc)),
         updated_at=kwargs.get("updated_at", datetime.now(timezone.utc)),
     )
-    # Override set_password and verify_password to use actual Argon2 implementation
-    user.set_password = lambda password: setattr(user, 'password', hash_password(password))
-    user.verify_password = lambda password: verify_password(user.password, password)
+    # REMOVED: Overrides of set_password and verify_password
+    # user.set_password = lambda password: setattr(user, 'password', hash_password(password))
+    # user.verify_password = lambda password: verify_password(user.password, password)
     return user
 
 # Model-level tests
@@ -103,17 +104,17 @@ async def test_user_password_methods():
     user = user_model_stub()
     plain_password = "SecurePass123!"
     
-    # Test set_password
+    # Test set_password (now uses the actual UserModel.set_password)
     logger.debug("Testing set_password")
     user.set_password(plain_password)
     assert user.password != plain_password  # Password should be hashed
     assert user.password.startswith("$argon2id$")  # Verify Argon2 hash format
     
-    # Test verify_password with correct password
+    # Test verify_password with correct password (now uses the actual UserModel.verify_password)
     logger.debug("Testing verify_password with correct password")
     assert user.verify_password(plain_password) is True
     
-    # Test verify_password with incorrect password
+    # Test verify_password with incorrect password (now uses the actual UserModel.verify_password)
     logger.debug("Testing verify_password with incorrect password")
     assert user.verify_password("WrongPass123!") is False
 
@@ -215,6 +216,43 @@ async def test_service_create_user():
     db.refresh.assert_awaited()
 
 @pytest.mark.asyncio
+async def test_service_create_user_db_commit_failure():
+    """Test UserService.create_user with db.commit raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    user_in = UserCreate(
+        email="failcommit@example.com", username="failcommit",
+        password="SecurePass123!", role_id=2, first="Commit", last="Fail"
+    )
+    db.commit.side_effect = SQLAlchemyError("Simulated commit error")
+
+    with pytest.raises(SQLAlchemyError, match="Simulated commit error"):
+        await UserService.create_user(db, user_in)
+    
+    db.add.assert_called_once() # User is added before commit attempt
+    db.commit.assert_awaited_once()
+    db.refresh.assert_not_awaited() # Refresh should not be called if commit fails
+    db.rollback.assert_not_awaited() # UserService does not explicitly rollback for this error
+
+@pytest.mark.asyncio
+async def test_service_create_user_db_refresh_failure():
+    """Test UserService.create_user with db.refresh raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    user_in = UserCreate(
+        email="failrefresh@example.com", username="failrefresh",
+        password="SecurePass123!", role_id=2, first="Refresh", last="Fail"
+    )
+    # Ensure commit succeeds, then refresh fails
+    db.refresh.side_effect = SQLAlchemyError("Simulated refresh error")
+
+    with pytest.raises(SQLAlchemyError, match="Simulated refresh error"):
+        await UserService.create_user(db, user_in)
+    
+    db.add.assert_called_once()
+    db.commit.assert_awaited_once() # Commit should have been called before refresh
+    db.refresh.assert_awaited_once()
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
 async def test_service_update_user():
     """Test UserService.update_user."""
     db = AsyncMock(spec=AsyncSession)
@@ -229,6 +267,44 @@ async def test_service_update_user():
     assert user.email == "newuser@example.com"
     db.commit.assert_awaited()
     db.refresh.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_db_commit_failure():
+    """Test UserService.update_user with db.commit raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    existing_user = user_model_stub(id=1, username="olduser")
+    mock_result.scalar_one_or_none.return_value = existing_user
+    db.execute.return_value = mock_result # For get_user call
+    
+    db.commit.side_effect = SQLAlchemyError("Simulated update commit error")
+
+    user_in = UserUpdate(username="newuser")
+    with pytest.raises(SQLAlchemyError, match="Simulated update commit error"):
+        await UserService.update_user(db, 1, user_in)
+    
+    db.execute.assert_awaited_once() # For get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_db_refresh_failure():
+    """Test UserService.update_user with db.refresh raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    existing_user = user_model_stub(id=1, username="olduser")
+    mock_result.scalar_one_or_none.return_value = existing_user
+    db.execute.return_value = mock_result # For get_user call
+
+    db.refresh.side_effect = SQLAlchemyError("Simulated update refresh error")
+
+    user_in = UserUpdate(username="newuser")
+    with pytest.raises(SQLAlchemyError, match="Simulated update refresh error"):
+        await UserService.update_user(db, 1, user_in)
+    
+    db.execute.assert_awaited_once() # For get_user
+    db.commit.assert_awaited_once() # Commit should have been called
+    db.refresh.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_service_update_user_not_found():
@@ -257,6 +333,42 @@ async def test_service_delete_user():
     assert deleted is True
     db.delete.assert_called_with(existing_user)
     db.commit.assert_awaited()
+
+@pytest.mark.asyncio
+async def test_service_delete_user_db_delete_failure():
+    """Test UserService.delete_user with db.delete raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    existing_user = user_model_stub(id=1)
+    mock_result.scalar_one_or_none.return_value = existing_user
+    db.execute.return_value = mock_result # For get_user call
+
+    db.delete.side_effect = SQLAlchemyError("Simulated delete error")
+
+    with pytest.raises(SQLAlchemyError, match="Simulated delete error"):
+        await UserService.delete_user(db, 1)
+    
+    db.execute.assert_awaited_once() # For get_user
+    db.delete.assert_called_once()
+    db.commit.assert_not_awaited() # Commit should not be called if delete fails
+
+@pytest.mark.asyncio
+async def test_service_delete_user_db_commit_failure():
+    """Test UserService.delete_user with db.commit raising SQLAlchemyError."""
+    db = AsyncMock(spec=AsyncSession)
+    mock_result = MagicMock()
+    existing_user = user_model_stub(id=1)
+    mock_result.scalar_one_or_none.return_value = existing_user
+    db.execute.return_value = mock_result # For get_user call
+
+    db.commit.side_effect = SQLAlchemyError("Simulated delete commit error")
+
+    with pytest.raises(SQLAlchemyError, match="Simulated delete commit error"):
+        await UserService.delete_user(db, 1)
+    
+    db.execute.assert_awaited_once() # For get_user
+    db.delete.assert_called_once()
+    db.commit.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_service_delete_user_not_found():
@@ -454,3 +566,4 @@ async def test_delete_user_not_found(async_client, monkeypatch):
     logger.debug(f"Response status: {response.status_code}, body: {response.json()}")
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"] == "User not found"
+
