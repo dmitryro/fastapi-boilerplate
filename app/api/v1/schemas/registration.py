@@ -8,7 +8,7 @@ class RegistrationBase(BaseModel):
     last: str
     username: str
     email: EmailStr
-    password: str
+    password: constr(min_length=8)
     phone: Optional[str] = None
     role_id: int
 
