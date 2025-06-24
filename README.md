@@ -76,7 +76,8 @@ app/
 │   └── v2/
 ├── core/ (settings, events, db, logging)
 ├── main.py
-└── models/
+├── sql/ (initial sql scripts to create tables and populate)
+└── tests/ (unit test)
 ```
 
 ---
