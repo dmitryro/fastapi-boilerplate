@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch # Import patch for monkeyp
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 from app.api.v1.services.user import UserService
-from app.api.v1.schemas.user import UserCreate, UserUpdate
+from app.api.v1.schemas.user import User, UserCreate, UserUpdate
 from app.api.v1.models.user import User as UserModel # Explicitly import UserModel
 from app.api.v1.models.role import Role # Explicitly import Role
 from app.api.v1.security.passwords import hash_password # Import hash_password to mock it
@@ -17,13 +17,18 @@ logger = logging.getLogger(__name__)
 # --- Dummy Classes to mock User and Role models for tests ---
 class DummyUser:
     """A dummy class to represent a User for general mocking purposes."""
-    def __init__(self, id=1, username="admin_user", email="admin@example.com", role_id=1, is_active=True, is_superuser=False):
+    def __init__(self, id=1, username="admin_user", email="admin@example.com", role_id=1, is_active=True, is_superuser=False, first="First", last="Last", phone=None):
         self.id = id
         self.username = username
         self.email = email
         self.role_id = role_id
         self.is_active = is_active
         self.is_superuser = is_superuser
+        self.first = first
+        self.last = last
+        self.phone = phone
+        self.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        self.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         # This will be populated by `user_model_stub` or specific mocks
         self.role = None 
         # Add _sa_instance_state to mimic SQLAlchemy ORM objects
@@ -507,7 +512,7 @@ async def test_service_update_user_success(async_db_session, monkeypatch):
         email="new@example.com",
         role_id=1, # Change role to admin (DummyRole with id=1 implicitly has '*' permissions)
         first="Updated",
-        last="User",
+        last="User", # Changed from "Name" to "User" to match user_in
         password="NewSecurePass123!"
     )
 
@@ -548,7 +553,7 @@ async def test_service_update_user_success(async_db_session, monkeypatch):
     assert user.email == "new@example.com"
     assert user.role_id == 1 # Verify updated role ID
     assert user.first == "Updated"
-    assert user.last == "User"
+    assert user.last == "User" 
     assert user.password == mock_hashed_new_password_value # Verify new password is set
     
     assert db.execute.call_count == 4 # Initial get_user + 3 validator checks
@@ -684,6 +689,7 @@ async def test_service_update_user_same_role_id(async_db_session):
     db.commit.assert_awaited_once()
     db.refresh.assert_awaited_once_with(existing_user)
     db.rollback.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_service_update_user_short_username(async_db_session):
@@ -934,4 +940,122 @@ async def test_service_delete_user_db_commit_failure(async_db_session):
     db.delete.assert_called_once_with(existing_user) # Delete should still be called before commit
     db.commit.assert_awaited_once() # Commit is called, then fails
     db.rollback.assert_awaited_once() # Rollback should occur on commit failure
+
+
+# --- Additional Tests for UserService.update_user (Single Field Updates) ---
+
+@pytest.mark.asyncio
+async def test_service_update_user_only_first_name(async_db_session):
+    """Test UserService.update_user when only first_name is changed."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, first="OldFirst")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.first = "NewFirst"
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(first="NewFirst")
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.first == "NewFirst"
+    assert db.execute.call_count == 1 # Only initial get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_only_last_name(async_db_session):
+    """Test UserService.update_user when only last_name is changed."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, last="OldLast")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.last = "NewLast"
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(last="NewLast")
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.last == "NewLast"
+    assert db.execute.call_count == 1 # Only initial get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_only_phone(async_db_session):
+    """Test UserService.update_user when only phone is changed."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, phone="123-456-7890")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.phone = "987-654-3210"
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(phone="987-654-3210")
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.phone == "987-654-3210"
+    assert db.execute.call_count == 1 # Only initial get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_only_is_active(async_db_session):
+    """Test UserService.update_user when only is_active status is changed."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, is_active=True)
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.is_active = False
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(is_active=False)
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.is_active is False
+    assert db.execute.call_count == 1 # Only initial get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_only_is_superuser(async_db_session):
+    """Test UserService.update_user when only is_superuser status is changed."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, is_superuser=False)
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.is_superuser = True
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(is_superuser=True)
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.is_superuser is True
+    assert db.execute.call_count == 1 # Only initial get_user
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
 
