@@ -914,3 +914,72 @@ async def test_permission_integration(async_client_for_security_tests, async_db_
     # Assert that db.execute was called multiple times (once for user, once for role)
     assert async_db_session.execute.call_count >= 2
 
+@pytest.mark.asyncio
+async def test_require_permission_not_list_tuple_set_but_truthy(async_db_session):
+    """Covers perms that are truthy but not list/tuple/set (e.g., custom object)."""
+    user = DummyUser()
+
+    class PermsObj:
+        def __bool__(self): return True  # Truthy
+        # Not a list/tuple/set, not iterable
+
+    class RoleCustomPerms:
+        id = 1
+        name = "custom"
+        permissions = PermsObj()
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleCustomPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("read")
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+@pytest.mark.asyncio
+async def test_require_permission_truthy_non_collection(async_db_session):
+    """Covers line 160 with permissions=1 (truthy, not list/tuple/set)."""
+    user = DummyUser()
+    class RoleIntPerms:
+        id = 1
+        name = "int_role"
+        permissions = 1  # truthy, not list/tuple/set
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleIntPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+    require_perm = require_permission("read")
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
+
+@pytest.mark.asyncio
+async def test_require_permission_truthy_noniterable_non_collection(async_db_session):
+    """Covers line 160: perms is truthy, not list/tuple/set, and not iterable."""
+    user = DummyUser()
+
+    class TruthyNonIterable:
+        def __bool__(self): return True
+
+    class RoleCustomPerms:
+        id = 1
+        name = "custom"
+        permissions = TruthyNonIterable()  # Not list/tuple/set, not iterable
+
+    mock_result = MagicMock()
+    mock_scalar_result = MagicMock()
+    mock_scalar_result.first.return_value = RoleCustomPerms()
+    mock_result.scalars.return_value = mock_scalar_result
+    async_db_session.execute.return_value = mock_result
+
+    require_perm = require_permission("read")
+    with pytest.raises(HTTPException) as exc_info:
+        await require_perm(user, async_db_session)
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "Permission denied"
