@@ -89,7 +89,8 @@ def get_application() -> FastAPI:
     # Override OpenAPI schema generation with OAuth2 password flow
     app.openapi = lambda: custom_openapi(app)
     app.middleware("http")(debug_middleware)
-
+    app.dependency_overrides = {} 
+    
     return app
 
 app = get_application()

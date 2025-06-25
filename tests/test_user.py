@@ -1,19 +1,59 @@
 import pytest
 from fastapi import HTTPException, status # Import status for HTTP status codes
+from httpx import AsyncClient
+from httpx import ASGITransport
 from unittest.mock import AsyncMock, MagicMock, patch # Import patch for monkeypatching functions
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
+from app.core.db.session import get_db
 from app.api.v1.services.user import UserService
 from app.api.v1.schemas.user import User, UserCreate, UserUpdate
 from app.api.v1.models.user import User as UserModel # Explicitly import UserModel
 from app.api.v1.models.role import Role # Explicitly import Role
 # These are imported by UserService, but User MODEL uses its own ph instance
+from app.api.v1.security.jwt import get_current_user
 from app.api.v1.security.passwords import hash_password, verify_password 
+import app.main  # Adjust if your FastAPI app is imported differently
+from app.main import app
 from datetime import datetime, timezone
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+@pytest.fixture
+def anyio_backend():
+    return 'asyncio'
+
+@pytest.fixture
+async def async_client(monkeypatch):
+    # Set up the mock DB session
+    db_session = AsyncMock()
+    # Permission dependency needs to see an admin or role with "read"
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.first.return_value = DummyRole()
+    mock_result.scalars.return_value = mock_scalars
+    db_session.execute.return_value = mock_result
+
+    # Patch UserService.get_all_users to return DummyUser
+    monkeypatch.setattr(UserService, "get_all_users", AsyncMock(return_value=[DummyUser()]))
+
+    # get_db override as async generator (CRITICAL)
+    async def override_get_db():
+        yield db_session
+    app.dependency_overrides[get_db] = override_get_db
+
+    # get_current_user override (CRITICAL)
+    async def override_get_current_user():
+        return DummyUser()
+    app.dependency_overrides[get_current_user] = override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+    app.dependency_overrides = {}
 
 # --- Dummy Classes to mock User and Role models for tests ---
 class DummyUser:
@@ -36,15 +76,22 @@ class DummyUser:
 
 class DummyRole:
     """A dummy class to represent a Role model in tests."""
-    def __init__(self, id=1, name="admin", permissions=None):
+    def __init__(self, id=1, name="admin", permissions=["create", "read", "update", "delete"]):
         self.id = id
         self.name = name
         self.permissions = permissions if permissions is not None else []
         self.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         # Add _sa_instance_state to mimic SQLAlchemy ORM objects
         self._sa_instance_state = MagicMock()
-
+        
 # --- Fixtures ---
+
+@pytest.fixture
+def override_get_current_user():
+    async def _override(*args, **kwargs):
+        return DummyUser()
+    return _override
+
 
 @pytest.fixture
 async def async_db_session():
@@ -1198,3 +1245,81 @@ async def test_user_model_verify_password_failure():
         mock_ph.verify.assert_called_once_with(hashed_password_stored, wrong_password)
         assert result is False
 
+@pytest.mark.asyncio
+async def test_read_user_404(async_client, monkeypatch):
+    monkeypatch.setattr(UserService, "get_user", AsyncMock(return_value=None))
+    response = await async_client.get("/api/v1/users/123")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+
+@pytest.mark.asyncio
+async def test_update_user_404(async_client, monkeypatch):
+    monkeypatch.setattr(UserService, "update_user", AsyncMock(return_value=None))
+    # Minimal valid user update body
+    update_body = {"username": "updated_user"}
+    response = await async_client.put("/api/v1/users/123", json=update_body)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+
+@pytest.mark.asyncio
+async def test_delete_user_404(async_client, monkeypatch):
+    monkeypatch.setattr(UserService, "delete_user", AsyncMock(return_value=False))
+    response = await async_client.delete("/api/v1/users/123")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"
+
+@pytest.mark.asyncio
+async def test_create_user_happy_path(async_client, monkeypatch):
+    dummy = DummyUser(id=2, username="created_user", email="c@example.com")
+    monkeypatch.setattr(UserService, "create_user", AsyncMock(return_value=dummy))
+    post_body = {
+        "username": "created_user",
+        "email": "c@example.com",
+        "password": "SuperSecret1!",
+        "role_id": 1,
+        "first": "First",
+        "last": "Last"
+    }
+    response = await async_client.post("/api/v1/users/", json=post_body)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["username"] == "created_user"
+    assert data["email"] == "c@example.com"
+    assert data["id"] == 2
+
+@pytest.mark.asyncio
+async def test_read_user_happy_path(async_client, monkeypatch):
+    dummy_user = DummyUser(id=42, username="happy_user", email="happy@example.com")
+    monkeypatch.setattr(UserService, "get_user", AsyncMock(return_value=dummy_user))
+    response = await async_client.get("/api/v1/users/42")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == 42
+    assert data["username"] == "happy_user"
+    assert data["email"] == "happy@example.com"
+
+@pytest.mark.asyncio
+async def test_update_user_happy_path(async_client, monkeypatch):
+    dummy_user = DummyUser(id=43, username="updated_user", email="updated@example.com")
+    monkeypatch.setattr(UserService, "update_user", AsyncMock(return_value=dummy_user))
+    update_body = {"username": "updated_user"}
+    response = await async_client.put("/api/v1/users/43", json=update_body)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["id"] == 43
+    assert data["username"] == "updated_user"
+
+@pytest.mark.asyncio
+async def test_delete_user_happy_path(async_client, monkeypatch):
+    monkeypatch.setattr(UserService, "delete_user", AsyncMock(return_value=True))
+    response = await async_client.delete("/api/v1/users/44")
+    assert response.status_code == 204
+    assert response.content == b""
+
+@pytest.mark.asyncio
+async def test_read_users(async_client):
+    response = await async_client.get("/api/v1/users/")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert data[0]["username"] == "admin_user"
