@@ -7,7 +7,8 @@ from app.api.v1.services.user import UserService
 from app.api.v1.schemas.user import User, UserCreate, UserUpdate
 from app.api.v1.models.user import User as UserModel # Explicitly import UserModel
 from app.api.v1.models.role import Role # Explicitly import Role
-from app.api.v1.security.passwords import hash_password # Import hash_password to mock it
+# These are imported by UserService, but User MODEL uses its own ph instance
+from app.api.v1.security.passwords import hash_password, verify_password 
 from datetime import datetime, timezone
 import logging
 
@@ -29,7 +30,6 @@ class DummyUser:
         self.phone = phone
         self.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         self.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-        # This will be populated by `user_model_stub` or specific mocks
         self.role = None 
         # Add _sa_instance_state to mimic SQLAlchemy ORM objects
         self._sa_instance_state = MagicMock()
@@ -138,8 +138,6 @@ async def test_service_create_user(async_db_session, monkeypatch):
         user_obj.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
         user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         # Ensure the password attribute on the user object is set to the mocked string value
-        # This is where the previous test was failing: user_obj.password was being set to an awaitable mock object
-        # instead of the string result of the mocked hash_password call.
         user_obj.password = mock_hashed_password_value 
         # Attach the dummy role to the user object, as the service typically does this
         user_obj.role = DummyRole(id=user_obj.role_id, name="user")
@@ -255,16 +253,10 @@ async def test_service_create_user_weak_password(async_db_session, monkeypatch):
         mock_execute_result_factory(scalar_one_or_none_value=DummyRole(id=2, name="user")), # Role existence check passes
     ]
 
-    # The password length validation is typically handled by Pydantic directly in the schema
-    # or by an explicit validator called within the service.
-    # If the service raises HTTPException for this, the test can assert on it.
-    # Removed the patch for validate_password_strength as its exact path might vary.
     with pytest.raises(HTTPException) as exc_info:
         await UserService.create_user(db, user_in)
     
-    # Assertions for the expected HTTPException (assuming UserService handles this validation)
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
-    # The detail message might vary depending on whether it's Pydantic or custom validation.
     assert "password" in exc_info.value.detail.lower() or "too short" in exc_info.value.detail.lower() # More general assertion
 
     assert db.execute.call_count == 3 # All DB-related validations pass before password check
@@ -289,7 +281,6 @@ async def test_service_create_user_short_username(async_db_session):
         mock_execute_result_factory(scalar_one_or_none_value=DummyRole(id=2, name="user")), # Role existence check passes
     ]
     
-    # Removed the patch for validate_username_length as its exact path might vary.
     with pytest.raises(HTTPException) as exc_info:
         await UserService.create_user(db, user_in)
     
@@ -317,7 +308,6 @@ async def test_service_create_user_short_first_name(async_db_session):
         mock_execute_result_factory(scalar_one_or_none_value=DummyRole(id=2, name="user")), # Role existence check passes
     ]
 
-    # Removed the patch for validate_first_name_length as its exact path might vary.
     with pytest.raises(HTTPException) as exc_info:
         await UserService.create_user(db, user_in)
     
@@ -345,7 +335,6 @@ async def test_service_create_user_short_last_name(async_db_session):
         mock_execute_result_factory(scalar_one_or_none_value=DummyRole(id=2, name="user")), # Role existence check passes
     ]
 
-    # Removed the patch for validate_last_name_length as its exact path might vary.
     with pytest.raises(HTTPException) as exc_info:
         await UserService.create_user(db, user_in)
     
@@ -512,7 +501,7 @@ async def test_service_update_user_success(async_db_session, monkeypatch):
         email="new@example.com",
         role_id=1, # Change role to admin (DummyRole with id=1 implicitly has '*' permissions)
         first="Updated",
-        last="User", # Changed from "Name" to "User" to match user_in
+        last="User", 
         password="NewSecurePass123!"
     )
 
@@ -542,7 +531,7 @@ async def test_service_update_user_success(async_db_session, monkeypatch):
         user_obj.last = user_in.last
         user_obj.password = mock_hashed_new_password_value # Set to the mocked hashed password string
         user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None) # Update timestamp
-        user_obj.role = DummyRole(id=user_obj.role_id, name="admin") # Update the associated role
+        user_obj.role = DummyRole(id=user_obj.role_id, name="admin")
     db.refresh.side_effect = update_refresh_side_effect
 
     user = await UserService.update_user(db, existing_user_id, user_in)
@@ -609,8 +598,11 @@ async def test_service_update_user_no_changes(async_db_session):
     db.rollback.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_service_update_user_same_username(async_db_session, monkeypatch):
-    """Test UserService.update_user when username is provided but is the same as current."""
+async def test_service_update_user_same_username(async_db_session):
+    """
+    Test UserService.update_user when username is provided but is the same as current.
+    Should not raise an exception, but succeed.
+    """
     db = async_db_session
     existing_user_id = 1
     existing_user_username = "currentuser"
@@ -625,7 +617,6 @@ async def test_service_update_user_same_username(async_db_session, monkeypatch):
 
     user_in = UserUpdate(username=existing_user_username) # Username is explicitly set but same
     
-    # Removed the patch for validate_username_length as its exact path might vary.
     user = await UserService.update_user(db, existing_user_id, user_in)
         
     assert user is not None
@@ -637,8 +628,11 @@ async def test_service_update_user_same_username(async_db_session, monkeypatch):
     db.rollback.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_service_update_user_same_email(async_db_session, monkeypatch):
-    """Test UserService.update_user when email is provided but is the same as current."""
+async def test_service_update_user_same_email(async_db_session):
+    """
+    Test UserService.update_user when email is provided but is the same as current.
+    Should not raise an exception, but succeed.
+    """
     db = async_db_session
     existing_user_id = 1
     existing_user_email = "current@example.com"
@@ -653,7 +647,6 @@ async def test_service_update_user_same_email(async_db_session, monkeypatch):
 
     user_in = UserUpdate(email=existing_user_email) # Email is explicitly set but same
     
-    # Removed the patch for validate_email_format as its exact path might vary.
     user = await UserService.update_user(db, existing_user_id, user_in)
         
     assert user is not None
@@ -704,7 +697,6 @@ async def test_service_update_user_short_username(async_db_session):
     
     user_in = UserUpdate(username="nu") # Too short
     with pytest.raises(HTTPException) as exc_info:
-        # Removed the patch for validate_username_length as its exact path might vary.
         await UserService.update_user(db, 1, user_in)
     
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
@@ -721,7 +713,6 @@ async def test_service_update_user_short_first_name(async_db_session):
     db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
     user_in = UserUpdate(first="N") # Too short
     with pytest.raises(HTTPException) as exc_info:
-        # Removed the patch for validate_first_name_length as its exact path might vary.
         await UserService.update_user(db, 1, user_in)
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert "first name" in exc_info.value.detail.lower() or "too short" in exc_info.value.detail.lower()
@@ -737,7 +728,6 @@ async def test_service_update_user_short_last_name(async_db_session):
     db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
     user_in = UserUpdate(last="U") # Too short
     with pytest.raises(HTTPException) as exc_info:
-        # Removed the patch for validate_last_name_length as its exact path might vary.
         await UserService.update_user(db, 1, user_in)
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert "last name" in exc_info.value.detail.lower() or "too short" in exc_info.value.detail.lower()
@@ -753,7 +743,6 @@ async def test_service_update_user_weak_password(async_db_session):
     db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
     user_in = UserUpdate(password="weak") # Too weak
     with pytest.raises(HTTPException) as exc_info:
-        # Removed the patch for validate_password_strength as its exact path might vary.
         await UserService.update_user(db, 1, user_in)
     assert exc_info.value.status_code == status.HTTP_400_BAD_REQUEST
     assert "password" in exc_info.value.detail.lower() or "too short" in exc_info.value.detail.lower()
@@ -942,7 +931,7 @@ async def test_service_delete_user_db_commit_failure(async_db_session):
     db.rollback.assert_awaited_once() # Rollback should occur on commit failure
 
 
-# --- Additional Tests for UserService.update_user (Single Field Updates) ---
+# --- Additional Tests for UserService.update_user (Single Field Updates & Nulling) ---
 
 @pytest.mark.asyncio
 async def test_service_update_user_only_first_name(async_db_session):
@@ -1058,4 +1047,154 @@ async def test_service_update_user_only_is_superuser(async_db_session):
     db.commit.assert_awaited_once()
     db.refresh.assert_awaited_once_with(existing_user)
     db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_set_first_name_to_none(async_db_session):
+    """Test UserService.update_user when first_name is explicitly set to None."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, first="OldFirst")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.first = None
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(first=None)
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.first is None
+    assert db.execute.call_count == 1 
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_set_last_name_to_none(async_db_session):
+    """Test UserService.update_user when last_name is explicitly set to None."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, last="OldLast")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.last = None
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(last=None)
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.last is None
+    assert db.execute.call_count == 1 
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_set_phone_to_none(async_db_session):
+    """Test UserService.update_user when phone is explicitly set to None."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, phone="123-456-7890")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    def update_refresh_side_effect(user_obj):
+        user_obj.phone = None
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(phone=None)
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.phone is None
+    assert db.execute.call_count == 1 
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_service_update_user_password_not_updated_if_not_provided(async_db_session, monkeypatch):
+    """Test UserService.update_user does not hash/update password if not provided in UserUpdate."""
+    db = async_db_session
+    existing_user = user_model_stub(id=1, password="existing_hashed_password")
+    db.execute.return_value = mock_execute_result_factory(scalar_one_or_none_value=existing_user)
+
+    mock_hash_password = AsyncMock(return_value="should_not_be_called")
+    monkeypatch.setattr("app.api.v1.services.user.hash_password", mock_hash_password)
+
+    def update_refresh_side_effect(user_obj):
+        # Only update timestamp, password should remain as original
+        user_obj.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        user_obj.role = DummyRole(id=user_obj.role_id)
+    db.refresh.side_effect = update_refresh_side_effect
+
+    user_in = UserUpdate(first="UpdatedFirst") # No password provided
+    user = await UserService.update_user(db, 1, user_in)
+    
+    assert user is not None
+    assert user.password == "existing_hashed_password" # Password should remain unchanged
+    mock_hash_password.assert_not_awaited() # hash_password should NOT be called
+    assert db.execute.call_count == 1
+    db.commit.assert_awaited_once()
+    db.refresh.assert_awaited_once_with(existing_user)
+    db.rollback.assert_not_awaited()
+
+# --- New tests for app/api/v1/models/user.py (User model methods) ---
+
+@pytest.mark.asyncio
+async def test_user_model_set_password_hashes_correctly():
+    """Test that User.set_password hashes the provided plain password."""
+    user = UserModel(username="test", email="test@example.com", password="initial", role_id=2)
+    plain_password = "MySecurePassword123"
+    
+    # Correctly patch the 'ph' instance itself, then its 'hash' method
+    with patch("app.api.v1.models.user.ph") as mock_ph:
+        mock_ph.hash.return_value = "mock_hashed_password_for_set"
+        user.set_password(plain_password)
+
+        mock_ph.hash.assert_called_once_with(plain_password)
+        assert user.password == "mock_hashed_password_for_set"
+        assert user.password != plain_password
+
+@pytest.mark.asyncio
+async def test_user_model_verify_password_success():
+    """Test that User.verify_password returns True for a correct password."""
+    user = UserModel(username="test", email="test@example.com", password="initial", role_id=2)
+    plain_password = "CorrectPassword456"
+    hashed_password_stored = "mock_hashed_password_for_verify_success"
+
+    # Set the user's password to a pre-hashed value for testing verification
+    user.password = hashed_password_stored
+
+    # Correctly patch the 'ph' instance itself, then its 'verify' method
+    with patch("app.api.v1.models.user.ph") as mock_ph:
+        mock_ph.verify.return_value = True # Successfully verifies
+        result = user.verify_password(plain_password)
+
+        mock_ph.verify.assert_called_once_with(hashed_password_stored, plain_password)
+        assert result is True
+
+@pytest.mark.asyncio
+async def test_user_model_verify_password_failure():
+    """Test that User.verify_password returns False for an incorrect password."""
+    user = UserModel(username="test", email="test@example.com", password="initial", role_id=2)
+    wrong_password = "WrongPassword123"
+    hashed_password_stored = "mock_hashed_password_for_verify_failure"
+
+    # Set the user's password to a pre-hashed value for testing verification
+    user.password = hashed_password_stored
+
+    # Correctly patch the 'ph' instance itself, then its 'verify' method to simulate failure
+    from argon2.exceptions import VerifyMismatchError # Import here to ensure it's the correct one
+    with patch("app.api.v1.models.user.ph") as mock_ph:
+        mock_ph.verify.side_effect = VerifyMismatchError("Simulated password mismatch")
+        result = user.verify_password(wrong_password)
+
+        mock_ph.verify.assert_called_once_with(hashed_password_stored, wrong_password)
+        assert result is False
 
